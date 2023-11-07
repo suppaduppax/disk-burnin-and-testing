@@ -124,6 +124,12 @@
 # 
 ########################################################################
 
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Please run as root"
+  exit
+fi
+
 if [ $# -ne 1 ]; then
   echo "Error: not enough arguments!"
   echo "Usage is: $0 drive_device_specifier"
@@ -135,7 +141,7 @@ Drive=$1
 # Set Dry_Run to a non-zero value to test out the script without actually
 # running any tests: set it to zero when you are ready to burn-in disks.
 
-Dry_Run=1
+Dry_Run=0
 
 # Directory specifiers for log and badblocks data files. Leave off the 
 # trailing slash:
@@ -145,6 +151,9 @@ BB_Dir="."
 
 Default_Short_Test_Minutes=2
 
+# how long ago must a test have been completed to be counted as already complete
+Test_Result_Threshold_Hours=1
+
 ########################################################################
 #
 # Prologue
@@ -152,6 +161,8 @@ Default_Short_Test_Minutes=2
 ########################################################################
 
 # Obtain the disk model and serial number:
+
+Current_Power_On_Hours=$(smartctl -a /dev/"$Drive" | grep "Accumulated power on" | sed "s/:/ /g" | awk '{print $7}' | tr -d '\n')
 
 Disk_Model=$(smartctl -i /dev/"$Drive" | grep "Device Model" | awk '{print $3, $4, $5}' | sed -e 's/^[ \t]*//;s/[ \t]*$//' | sed -e 's/ /_/')
 
@@ -233,8 +244,83 @@ push_header()
   echo_str "+-----------------------------------------------------------------------------"
 }
 
-poll_selftest_complete()
-{
+# $1 - l_test_type - 'Background long' | 'Background short'
+get_hours_since_last_smart_test() {
+  l_test_type="${1}"
+  l_check_completed_hours=$(smartctl -a /dev/"$Drive" | grep "# 1.*${l_test_type}" | grep -o "[0-9]*[ ]*[0-9\-]*[ ]*\[.*]" | awk '{print $1}')
+  if [ -z "${l_check_completed_hours}" ]; then
+    echo "-1"
+  else
+    echo $((Current_Power_On_Hours-l_check_completed_hours))
+  fi
+}
+
+poll_sas_selftest_complete() {
+  l_rv=1
+  l_status=0
+  l_done=0
+  l_pollduration=0
+  l_test_type="${1}"
+
+# Check SMART results for "The previous self-test routine completed"
+# Return 0 if the test has completed, 1 if we exceed our polling timeout interval
+
+  while [ $l_done -eq 0 ];
+  do
+    latest_completed_test_line=$(smartctl -a /dev/"$Drive" | grep "# 1[ ]*Background")
+    check_completed_type=$(echo "$latest_completed_test_line" | grep "Background ${l_test_type}")
+    check_completed_hours=$(echo "$latest_completed_test_line" | grep -o "[0-9]*[ ]*[0-9\-]*[ ]*\[.*]" | awk '{print $1}')
+
+    if [ ! -z "${check_completed_type}" ] && [ "${check_completed_type}" != "Background ${l_test_type}" ]; then
+      if [ ! -z "${check_completed_hours}" ] && [ $(get_hours_since_last_smart_test "Background $l_test_type") -le "${Test_Result_Threshold_Hours}"  ]; then
+        check_completed_status=$(echo "$latest_completed_test_line" | awk '{print $5}')
+
+        if [ "${check_completed_status}" = "Completed" ]; then
+          echo_str "SMART self-test complete"
+          l_rv=0
+          l_done=1
+        elif [ "${check_completed_status}" = "Failed" ]; then
+          # failed_msg=$(latest_completed_test_line | grep -o "Failed in segment -->[ ]*[0-9]*" )
+          echo_str "SMART self-test failed: '${latest_completed_test_line}'"
+          l_rv=0
+          l_done=1
+        else
+          echo_str "Could not determine SMART completion status: '${check_completed_status}'"
+          exit 1
+        fi
+      fi
+    fi
+
+    if [ $l_done -eq 0 ]; then
+      if [ $l_pollduration -ge "${Poll_Timeout}" ]; then
+        echo_str "Timeout polling for SMART self-test status"
+        l_done=1
+      else
+        sleep ${Poll_Interval}
+        l_pollduration=$((l_pollduration+Poll_Interval))
+      fi
+    fi
+      # smartctl -a /dev/"$Drive" | grep -i "of the test failed." > /dev/null 2<&1
+      # l#_status=$?
+      #if [ $l_status -eq 0 ]; then
+      #  echo_str "SMART self-test failed"
+      #  l_rv=0
+      #  l_done=1
+      #else
+      #  if [ $l_pollduration -ge "${Poll_Timeout}" ]; then
+      #    echo_str "Timeout polling for SMART self-test status"
+      #    l_done=1
+      #  else
+      #    sleep ${Poll_Interval}
+      #    l_pollduration=$((l_pollduration+Poll_Interval))
+      #  fi
+      #fi
+  done
+
+  return $l_rv
+}
+
+poll_selftest_complete() {
   l_rv=1
   l_status=0
   l_done=0
@@ -244,7 +330,7 @@ poll_selftest_complete()
 # Return 0 if the test has completed, 1 if we exceed our polling timeout interval
 
   while [ $l_done -eq 0 ];
-  do  
+  do
     smartctl -a /dev/"$Drive" | grep -i "The previous self-test routine completed" > /dev/null 2<&1
     l_status=$?
     if [ $l_status -eq 0 ]; then
@@ -252,7 +338,7 @@ poll_selftest_complete()
       l_rv=0
       l_done=1
     else
-      # Check for failure    
+      # Check for failure
       smartctl -a /dev/"$Drive" | grep -i "of the test failed." > /dev/null 2<&1
       l_status=$?
       if [ $l_status -eq 0 ]; then
@@ -272,7 +358,7 @@ poll_selftest_complete()
   done
 
   return $l_rv
-} 
+}
 
 run_short_test()
 {
@@ -283,7 +369,11 @@ run_short_test()
     smartctl -t short /dev/"$Drive"
     echo_str "Short test started, sleeping ${Short_Test_Sleep} seconds until it finishes"
     sleep ${Short_Test_Sleep}
-    poll_selftest_complete
+    if [ ${Device_Type} == 'ATA' ]; then
+      poll_selftest_complete
+    else
+      poll_sas_selftest_complete "short"
+    fi
     smartctl -l selftest /dev/"$Drive" | tee -a "$Log_File"
   else
     echo_str "Dry run: would start the SMART short test and sleep ${Short_Test_Sleep} seconds until the test finishes"
@@ -300,7 +390,11 @@ run_extended_test()
     smartctl -t long /dev/"$Drive"
     echo_str "Extended test started, sleeping ${Extended_Test_Sleep} seconds until it finishes"
     sleep ${Extended_Test_Sleep}
-    poll_selftest_complete
+    if [ ${Device_Type} == 'ATA' ]; then
+      poll_selftest_complete
+    else
+      poll_sas_selftest_complete "long"
+    fi
     smartctl -l selftest /dev/"$Drive" | tee -a "$Log_File"
   else
     echo_str "Dry run: would start the SMART extended test and sleep ${Extended_Test_Sleep} seconds until the test finishes"
