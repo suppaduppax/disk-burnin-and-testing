@@ -143,6 +143,8 @@ Dry_Run=1
 Log_Dir="."
 BB_Dir="."
 
+Default_Short_Test_Minutes=2
+
 ########################################################################
 #
 # Prologue
@@ -157,7 +159,12 @@ if [ -z "$Disk_Model" ]; then
   Disk_Model=$(smartctl -i /dev/"$Drive" | grep "Model Family" | awk '{print $3, $4, $5}' | sed -e 's/^[ \t]*//;s/[ \t]*$//' | sed -e 's/ /_/')
 fi
 
-Serial_Number=$(smartctl -i /dev/"$Drive" | grep "Serial Number" | awk '{print $3}' | sed -e 's/ /_/')
+if [ -z "$Disk_Model" ]; then
+  Disk_Vendor=$(smartctl -i /dev/"$Drive" | grep "Vendor: " | awk '{print $2}')
+  Disk_Model="${Disk_Vendor}-$(smartctl -i /dev/"$Drive" | grep "Product: " | awk '{print $2}')"
+fi
+
+Serial_Number=$(smartctl -i /dev/"$Drive" | grep "Serial [nN]umber" | awk '{print $3}' | sed -e 's/ /_/')
 
 # Form the log and bad blocks data filenames:
 
@@ -167,14 +174,36 @@ Log_File=$Log_Dir/$Log_File
 BB_File="burnin-${Disk_Model}_${Serial_Number}.bb"
 BB_File=$BB_Dir/$BB_File
 
+# Get disk type SAS/SATA
+Device_Type=$(smartctl -i /dev/sdb | grep "Transport protocol:" | awk '{print $3}' | tr -d '\n')
+if [ -z "$Device_Type" ]; then
+  Device_Type=$(smartctl -i /dev/da2 | grep "ATA Version is:" | awk '{print $1}' | tr -d '\n')
+  if [ -z "$Device_Type" ]; then
+    echo "Cannot determine device type..."
+    exit 1
+  fi
+fi
+
 # Query the short and extended test duration, in minutes. Use the values to
 # calculate how long we should sleep after starting the SMART tests:
 
-Short_Test_Minutes=$(smartctl -c /dev/"$Drive" | pcregrep -M "Short self-test routine.*\n.*recommended polling time:" | sed -e 's/)//;s/(//' | awk '{print $4}' | tr -d '\n')
+Short_Test_Minutes=$(smartctl -c /dev/"$Drive" | grep -P "Short self-test routine.*\n.*recommended polling time:" | sed -e 's/)//;s/(//' | awk '{print $4}' | tr -d '\n')
+if [ -z "$Short_Test_Minutes" ]; then
+  if [ "$Device_Type" = "SAS" ]; then
+    Short_Test_Minutes="$Default_Short_Test_Minutes"
+  else
+    echo "Cannot determine short test minutes..."
+    exit 1
+  fi
+fi
 #printf "Short_Test_Minutes=[%s]\n" ${Short_Test_Minutes}
 
-Extended_Test_Minutes=$(smartctl -c /dev/"$Drive" | pcregrep -M "Extended self-test routine.*\n.*recommended polling time:" | sed -e 's/)//;s/(//' | awk '{print $4}' | tr -d '\n')
+Extended_Test_Minutes=$(smartctl -c /dev/"$Drive" | grep -P "Extended self-test routine.*\n.*recommended polling time:" | sed -e 's/)//;s/(//' | awk '{print $4}' | tr -d '\n')
+if [ -z "$Extended_Test_Minutes" ]; then
+  Extended_Test_Minutes=$(printf "%.0f" $(smartctl -a /dev/"$Drive" | grep -P "Long \(extended\) Self-test duration: [0-9]*" | sed -e 's/\]//;s/\[//' | awk '{print $7}' | tr -d '\n'))
+fi
 #printf "Extended_Test_Minutes=[%s]\n" ${Extended_Test_Minutes}
+
 
 Short_Test_Sleep=$((Short_Test_Minutes*60))
 Extended_Test_Sleep=$((Extended_Test_Minutes*60))
@@ -312,7 +341,9 @@ push_header
 echo_str "Host: $(hostname)"
 echo_str "Drive Model: ${Disk_Model}"
 echo_str "Serial Number: ${Serial_Number}"
-echo_str "Short test duration: ${Short_Test_Minutes} minutes"
+if [ ! -z "${Short_Test_Minutes}" ]; then
+  echo_str "Short test duration: ${Short_Test_Minutes} minutes"
+fi
 echo_str "Short test sleep duration: ${Short_Test_Sleep} seconds"
 echo_str "Extended test duration: ${Extended_Test_Minutes} minutes"
 echo_str "Extended test sleep duration: ${Extended_Test_Sleep} seconds"
