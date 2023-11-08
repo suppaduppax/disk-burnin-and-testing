@@ -280,6 +280,8 @@ readonly BB_E_ARG
 readonly BB_B_ARG
 readonly BB_C_ARG
 
+readonly MIN_SHORT_TEST_DURATION=2
+
 # Drive to burn-in
 DRIVE="$1"
 # prepend /dev/ if necessary
@@ -349,14 +351,25 @@ get_smart_test_duration() {
   # getline;                      jump to next line
   # gsub(/\(|\)/, "");            remove parantheses
   # printf $4                     print 4th column without newline at the end
-  printf '%s' "${SMART_CAPABILITIES}" \
+  [ "${PROTOCOL}" = 'SATA' ] && printf '%s' "${SMART_CAPABILITIES}" \
     | awk '/'"$1"' self-test routine/{getline; gsub(/\(|\)/, ""); printf $4}'
+  [ "${PROTOCOL}" = 'SAS' ] && [ "$1" = "Short" ] && printf '%s' "${MIN_SHORT_TEST_DURATION}";
+  # gsub(/\[|\]/, "");            remove square brackets
+  # gsub(/\..*/, "");             remove decimal
+  # printf $7                     print 7th column without newline at the end
+  [ "${PROTOCOL}" = 'SAS' ] && [ "$1" = "Extended" ] && smartctl --all "${DRIVE}" | grep -i 'Long (extended) Self-test duration:' | awk '{gsub(/\[|\]/, "");gsub(/\..*/, "");printf $7}';
 }
+
+# Get disk transport protocol (SAS/SATA)
+PROTOCOL=$(get_smart_info_value "Transport protocol" | sed 's/_/ /g' | awk '{print $1}')
+[ -z "${PROTOCOL}" ] && PROTOCOL="$(printf '%s' "${SMART_INFO}" | grep 'SATA Version is:' | awk '{print $1}')"
+readonly PROTOCOL
 
 # Get disk model
 DISK_MODEL="$(get_smart_info_value "Device Model")"
 [ -z "${DISK_MODEL}" ] && DISK_MODEL="$(get_smart_info_value "Model Family")"
 [ -z "${DISK_MODEL}" ] && DISK_MODEL="$(get_smart_info_value "Model Number")"
+[ -z "${DISK_MODEL}" ] && DISK_MODEL="$(printf '%s' "${SMART_INFO}" | grep 'Product:' | awk '{print $2}')"
 readonly DISK_MODEL
 
 # Get disk type; unless we get 'Solid State Device' as return value, assume 
@@ -368,7 +381,7 @@ fi
 readonly DISK_TYPE
 
 # Get disk serial number
-readonly SERIAL_NUMBER="$(get_smart_info_value "Serial Number")"
+readonly SERIAL_NUMBER="$(get_smart_info_value "Serial [Nn]umber")"
 
 # SMART short test duration
 readonly SHORT_TEST_MINUTES="$(get_smart_test_duration "Short")"
@@ -496,6 +509,7 @@ log_runtime_info() {
   log_info "OS:                     ${OS_FLAVOR}"
   log_info "Drive:                  ${DRIVE}"
   log_info "Disk Type:              ${DISK_TYPE}"
+  log_info "Protocol:               ${PROTOCOL}"
   log_info "Drive Model:            ${DISK_MODEL}"
   log_info "Serial Number:          ${SERIAL_NUMBER}"
   log_info "Short test duration:    ${SHORT_TEST_MINUTES} minutes"
@@ -504,6 +518,48 @@ log_runtime_info() {
   log_info "                        ${EXTENDED_TEST_SECONDS} seconds"
   log_info "Log file:               ${LOG_FILE}"
   log_info "Bad blocks file:        ${BB_File}"
+}
+
+did_selftest_succeed() {
+    if [ "${PROTOCOL}" = "SATA" ]; then
+      smartctl --all "${DRIVE}" \
+        | grep -i "The previous self-test routine completed" > /dev/null 2>&1
+      if [ "$?" -eq 0 ]; then
+        return 1
+      else
+        return 0
+      fi
+    elif [ "${PROTOCOL}" = "SAS" ]; then
+      smartctl --all "${DRIVE}" \
+        | grep -i "# 1[ ]*Background" \
+        | grep -i "Self test in progress" > /dev/null 2>&1
+      if [ "$?" -ne 0 ]; then
+        return 1
+      else
+        return 0
+      fi
+    fi
+}
+
+did_selftest_fail() {
+  if [ "${PROTOCOL}" = "SATA" ]; then
+    smartctl --all "${DRIVE}" \
+      | grep -i "of the test failed\." > /dev/null 2>&1
+    if [ "$?" -eq 0 ]; then
+      return 1
+    else
+      return 0
+    fi
+  elif [ "${PROTOCOL}" = "SAS" ]; then
+    smartctl --all "${DRIVE}" \
+      | grep -i "# 1[ ]*Background" \
+      | grep -i "Failed in segment" > /dev/null 2>&1
+    if [ "$?" -eq 0 ]; then
+      return 1
+    else
+      return 0
+    fi
+  fi
 }
 
 ##################################################
@@ -518,20 +574,22 @@ log_runtime_info() {
 #   0 if success or failure.
 #   1 if timeout threshold exceeded.
 ##################################################
+#
+# Self-test execution status:             90% of test remaining
+# SMART Self-test log
+# Num  Test              Status                 segment  LifeTime  LBA_first_err [SK ASC ASQ]
+#     Description                              number   (hours)
+# # 1  Background short  Self test in progress ...   -     NOW                 - [-   -    -]
+# # 2  Background long   Completed                   -   32640                 - [-   -    -]
+#
 poll_selftest_complete() {
   l_poll_duration_seconds=0
   while [ "${l_poll_duration_seconds}" -lt "${POLL_TIMEOUT_SECONDS}" ]; do
-    smartctl --all "${DRIVE}" \
-      | grep -i "The previous self-test routine completed" > /dev/null 2>&1
-    l_status="$?"
-    if [ "${l_status}" -eq 0 ]; then
+    # success
+    if $(did_selftest_succeed); then
       log_info "SMART self-test succeeded"
       return 0
-    fi
-    smartctl --all "${DRIVE}" \
-      | grep -i "of the test failed\." > /dev/null 2>&1
-    l_status="$?"
-    if [ "${l_status}" -eq 0 ]; then
+    elif $(did_selftest_fail); then
       log_info "SMART self-test failed"
       return 0
     fi
@@ -558,7 +616,7 @@ run_smart_test() {
   dry_run_wrapper "smartctl --test=\"$1\" \"${DRIVE}\""
   log_info "SMART $1 test started, awaiting completion for $2 seconds ..."
   dry_run_wrapper "sleep \"$2\""
-  dry_run_wrapper "poll_selftest_complete"
+  dry_run_wrapper "poll_selftest_complete \"$1\""
   dry_run_wrapper "smartctl --log=selftest \"${DRIVE}\" | tee -a \"${LOG_FILE}\""
   log_info "Finished SMART $1 test"
 }
