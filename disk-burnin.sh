@@ -46,7 +46,7 @@ DESCRIPTION
 OPTIONS
     -h                Show help text
     -e                Show extended help text
-    -b <block_size>   Override block size (defaults to 8192)
+    -b <block_size>   Override block size (defaults to 4096)
     -c <num_blocks>   Override concurrent number of blocks tested
     -f                Force script to run in destructive mode
                       ALL DATA ON THE DISK WILL BE LOST!
@@ -121,7 +121,7 @@ NOTES
     The script extracts the drive model and serial number and forms a log file-
     name of the form 'burnin-[model]_[serial number].log'.
 
-    badblocks is invoked with a block size of 8192, the -wsv options, and the
+    badblocks is invoked with a block size of 4096, the -wsv options, and the
     -o option to instruct it to write the list of bad blocks found (if any) to
     a file named 'burnin-[model]_[serial number].bb'.
 
@@ -228,8 +228,8 @@ VERSIONS
 # badblocks default -e option is 1, stop testing if a single error occurs
 BB_E_ARG=1
 
-# badblocks default -b option is 1024, but we default to 8192. This allows overriding if desired.
-BB_B_ARG=8192
+# badblocks default -b option is 1024, but we default to 4096. This allows overriding if desired.
+BB_B_ARG=4096
 
 # badblocks default -c option is 64, and this allows overriding
 BB_C_ARG=64
