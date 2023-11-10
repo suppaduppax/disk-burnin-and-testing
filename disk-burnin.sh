@@ -529,7 +529,7 @@ did_selftest_succeed() {
       else
         return 0
       fi
-    elif [ "${PROTOCOL}" = "SAS" ]; then
+    else
       smartctl --all "${DRIVE}" \
         | grep -i "# 1[ ]*Background" \
         | grep -i "Self test in progress" > /dev/null 2>&1
@@ -550,7 +550,7 @@ did_selftest_fail() {
     else
       return 0
     fi
-  elif [ "${PROTOCOL}" = "SAS" ]; then
+  else
     smartctl --all "${DRIVE}" \
       | grep -i "# 1[ ]*Background" \
       | grep -i "Failed in segment" > /dev/null 2>&1
@@ -591,7 +591,7 @@ poll_selftest_complete() {
       return 0
     elif $(did_selftest_fail); then
       log_info "SMART self-test failed"
-      return 0
+      return 1
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
     l_poll_duration_seconds="$(( l_poll_duration_seconds + POLL_INTERVAL_SECONDS ))"
@@ -616,8 +616,7 @@ run_smart_test() {
   dry_run_wrapper "smartctl --test=\"$1\" \"${DRIVE}\""
   log_info "SMART $1 test started, awaiting completion for $2 seconds ..."
   dry_run_wrapper "sleep \"$2\""
-  dry_run_wrapper "poll_selftest_complete \"$1\""
-  dry_run_wrapper "smartctl --log=selftest \"${DRIVE}\" | tee -a \"${LOG_FILE}\""
+  dry_run_wrapper "poll_selftest_complete \"$1\"  dry_run_wrapper "smartctl --log=error --log=selftest \"${DRIVE}\" | tee -a \"${LOG_FILE}\""
   log_info "Finished SMART $1 test"
 }
 
