@@ -225,6 +225,9 @@ VERSIONS
     KY, 30 May 2022
         Added -b & -c options to control respective badblocks options."
 
+    AA, 10 Nov 2023
+        Added SAS drive support
+
 # badblocks default -e option is 1, stop testing if a single error occurs
 BB_E_ARG=1
 
