@@ -52,6 +52,13 @@ OPTIONS
                       ALL DATA ON THE DISK WILL BE LOST!
     -o <directory>    Write log files to <directory> (default: $(pwd))
     -x                Run full pass of badblocks instead of exiting on first error
+    -S                Limit burnin to only run SMART short test. (Can be combined with
+                      -S and -B)
+    -L                Limit burnin to only run SMART long test. (Can be combined with
+                      -S and -B)
+    -B                Limit burnim to only run badblocks. (Can be combined with
+                      -S and/or -L)
+    -O                Set SMART test to run -t force
     <disk>            Disk to burn-in (/dev/ may be omitted)
 
 EXAMPLES
@@ -223,10 +230,10 @@ VERSIONS
         Minor reformatting.
 
     KY, 30 May 2022
-        Added -b & -c options to control respective badblocks options."
+        Added -b & -c options to control respective badblocks options.
 
     AA, 10 Nov 2023
-        Added SAS drive support
+        Added SAS drive support."
 
 # badblocks default -e option is 1, stop testing if a single error occurs
 BB_E_ARG=1
@@ -237,8 +244,12 @@ BB_B_ARG=4096
 # badblocks default -c option is 64, and this allows overriding
 BB_C_ARG=64
 
+ONLY_SHORTTEST=0
+ONLY_LONGTEST=0
+ONLY_BADBLOCKS=0
+
 # parse options
-while getopts ':hefo:b:c:x' option; do
+while getopts ':hefo:b:c:xSLBO' option; do
   case "${option}" in
     h)  echo "${USAGE}"
         exit
@@ -256,6 +267,14 @@ while getopts ':hefo:b:c:x' option; do
     c)  BB_C_ARG="${OPTARG}"
         ;;
     x)  BB_E_ARG=0
+        ;;
+    L)  readonly ONLY_LONGTEST=1
+        ;;
+    S)  readonly ONLY_SHORTTEST=1
+        ;;
+    B)  readonly ONLY_BADBLOCKS=1
+        ;;
+    O)  readonly SMART_EXTRA_ARGS="${SMART_EXTRA_ARGS}--test=\"force\""
         ;;
     :)  printf 'Missing argument for -%s\n' "${OPTARG}" >&2
         echo "${USAGE}" >&2
@@ -616,10 +635,11 @@ poll_selftest_complete() {
 ##################################################
 run_smart_test() {
   log_header "Running SMART $1 test"
-  dry_run_wrapper "smartctl --test=\"$1\" \"${DRIVE}\""
+  dry_run_wrapper "smartctl --test=\"$1\" ${SMART_EXTRA_ARGS}\"${DRIVE}\""
   log_info "SMART $1 test started, awaiting completion for $2 seconds ..."
   dry_run_wrapper "sleep \"$2\""
-  dry_run_wrapper "poll_selftest_complete \"$1\"  dry_run_wrapper "smartctl --log=error --log=selftest \"${DRIVE}\" | tee -a \"${LOG_FILE}\""
+  dry_run_wrapper "poll_selftest_complete \"$1\""
+  dry_run_wrapper "smartctl --log=error --log=selftest \"${DRIVE}\" | tee -a \"${LOG_FILE}\""
   log_info "Finished SMART $1 test"
 }
 
@@ -671,9 +691,22 @@ main() {
   log_runtime_info
 
   # test sequence
-  run_smart_test "short" "${SHORT_TEST_SECONDS}"
-  run_badblocks_test
-  run_smart_test "long" "${EXTENDED_TEST_SECONDS}"
+  if [ $((ONLY_SHORTTEST+ONLY_LONGTEST+ONLY_BADBLOCKS)) -eq 0 ] || [ "${ONLY_SHORTTEST}" -eq 1 ]; then
+    run_smart_test "short" "${SHORT_TEST_SECONDS}"
+  else
+    log_header "Skipping SMART short test"
+  fi
+  if [ $((ONLY_SHORTTEST+ONLY_LONGTEST+ONLY_BADBLOCKS)) -eq 0 ] || [ "${ONLY_BADBLOCKS}" -eq 1 ]; then
+    run_badblocks_test
+  else
+    log_header "Skipping badblocks"
+  fi
+  if [ $((ONLY_SHORTTEST+ONLY_LONGTEST+ONLY_BADBLOCKS)) -eq 0 ] || [ "${ONLY_LONGTEST}" -eq 1 ]; then
+    run_smart_test "long" "${EXTENDED_TEST_SECONDS}"
+  else
+    log_info "Skipping SMART long test"
+
+  fi
 
   log_full_device_info
 
