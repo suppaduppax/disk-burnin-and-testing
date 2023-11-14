@@ -58,7 +58,7 @@ check_pass_sas() {
 		printf "${RED}[ FAIL ] "
 		errors=$((errors+1))
 	else
-		printf "${GREEN}[ SUCCESS ] "
+		printf "${GREEN}[ PASS ] "
 	fi
 	printf "Read uncorrectable errors: %1s${NC}\n" "$read_errors"
 
@@ -66,7 +66,7 @@ check_pass_sas() {
 		printf "${RED}[ FAIL ] "
 		errors=$((errors+1))
 	else
-		printf "${GREEN}[ SUCCESS ] "
+		printf "${GREEN}[ PASS ] "
 	fi
 	printf "Write uncorrectable errors: %1s${NC}\n" "${write_errors}"
 
@@ -74,7 +74,7 @@ check_pass_sas() {
 		printf "${RED}[ FAIL ] "
 		errors=$((errors+1))
 	else
-		printf "${GREEN}[ SUCCESS ] "
+		printf "${GREEN}[ PASS ] "
 	fi
 	printf "Verify uncorrectable errors: %1s${NC}\n" "${verify_errors}"
 
@@ -83,7 +83,7 @@ check_pass_sas() {
 		printf "${RED}[ FAIL ] "
 		errors=$((errors+1))
 	else
-		printf "${GREEN}[ SUCCESS ] "
+		printf "${GREEN}[ PASS ] "
 	fi
 	printf "Accumulated power on hours: %1s${NC}\n" "$power_on_hours"
 
@@ -93,7 +93,7 @@ check_pass_sas() {
 		printf "${RED}[ FAIL ] "
 		errors=$((errors+1))
 	else
-		printf "${GREEN}[ SUCCESS ] "
+		printf "${GREEN}[ PASS ] "
 	fi
 	printf "Bytes written: %1s${NC}\n" "$bytes_written"
 
@@ -135,7 +135,6 @@ check_dev() {
 	for arg in $@; do
       src="${arg}"
     if printf '%s' "${arg}" | grep "/dev/" > /dev/null 2>&1; then
-      echo "FOUND"
       SMART_RESULT="$(smartctl --all "${arg}")"
     else
       # first check if it exists in /dev/
