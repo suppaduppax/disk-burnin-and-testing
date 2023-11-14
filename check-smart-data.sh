@@ -138,7 +138,7 @@ check_dev() {
       SMART_RESULT="$(smartctl --all "${arg}")"
     else
       # first check if it exists in /dev/
-      if [ -f "/dev/${arg}" ]; then
+      if [ -e "/dev/${arg}" ]; then
         SMART_RESULT="$(smartctl --all "/dev/${arg}")"
         src="/dev/${arg}"
       elif [ -f "${arg}" ]; then
